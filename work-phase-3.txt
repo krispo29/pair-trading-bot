@@ -1,0 +1,114 @@
+
+### 1. เข้าใจสัญญาณการเทรด (Logic Table)
+
+ก่อนเขียน Code เราต้องวางเงื่อนไขให้ชัดเจน โดยอ้างอิงจากค่า Z-Score:
+
+| สถานการณ์ | Z-Score | การกระทำ (Action) | คำอธิบาย |
+| --- | --- | --- | --- |
+| **Upper Threshold** | $> +2.0$ | **Short Spread** | ขาย (Short) A + ซื้อ (Long) B |
+| **Lower Threshold** | $< -2.0$ | **Long Spread** | ซื้อ (Long) A + ขาย (Short) B |
+| **Exit Signal** | เข้าใกล้ $0$ | **Close Position** | ปิดออเดอร์ทั้ง A และ B เพื่อรับกำไร |
+
+---
+
+### 2. เขียน Trading Engine API
+
+เราจะสร้าง API Route ที่ทำหน้าที่ดึงข้อมูล -> คำนวณ -> และส่งคำสั่งเทรด โดยใช้ **CCXT** และเชื่อมต่อกับ **Neon** เพื่อตรวจสอบว่าตอนนี้เรามีออเดอร์ค้างอยู่หรือไม่
+
+**ไฟล์: `src/app/api/trade/route.ts**`
+
+```typescript
+import { NextResponse } from 'next/server';
+import { db } from '@/db';
+import { tradingPairs, tradeHistory } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
+import { getExchangeClient } from '@/lib/exchange';
+import { getPairData } from '@/lib/market';
+import { calculateZScore } from '@/lib/math';
+
+export async function POST() {
+  try {
+    // 1. ดึงคู่เทรดที่เปิดใช้งานจาก Neon
+    const activePairs = await db.select().from(tradingPairs).where(eq(tradingPairs.isActive, true));
+
+    const exchange = await getExchangeClient(); // ใช้ Key ที่ Decrypt แล้ว
+
+    for (const pair of activePairs) {
+      // 2. ดึงราคาและคำนวณ Z-Score ล่าสุด
+      const { pricesA, pricesB } = await getPairData(exchange, pair.assetA, pair.assetB);
+      const { zScore } = calculateZScore(pricesA, pricesB);
+
+      // 3. ตรวจสอบสถานะปัจจุบันใน Database (มีออเดอร์ค้างไหม?)
+      const openTrade = await db.query.tradeHistory.findFirst({
+        where: and(eq(tradeHistory.pairId, pair.id), eq(tradeHistory.status, 'open'))
+      });
+
+      // --- Logic: เปิดออเดอร์ใหม่ ---
+      if (!openTrade) {
+        if (zScore > pair.upperThreshold) {
+          // Action: Short Spread (Sell A, Buy B)
+          await executeTrade(exchange, pair, 'SHORT_SPREAD', 'sell', 'buy');
+        } else if (zScore < pair.lowerThreshold) {
+          // Action: Long Spread (Buy A, Sell B)
+          await executeTrade(exchange, pair, 'LONG_SPREAD', 'buy', 'sell');
+        }
+      } 
+      // --- Logic: ปิดออเดอร์ (Take Profit) ---
+      else if (openTrade && Math.abs(zScore) < 0.5) {
+        await closeTrade(exchange, pair, openTrade);
+      }
+    }
+
+    return NextResponse.json({ message: 'Trade check completed' });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// ฟังก์ชันช่วยส่งคำสั่งเทรดพร้อมกัน 2 ตัว
+async function executeTrade(exchange: any, pair: any, type: string, sideA: any, sideB: any) {
+  const quantity = 0.01; // ตัวอย่าง: ควรคำนวณจาก Position Sizing
+
+  // ส่งคำสั่งแบบ Market Order (เพื่อความเร็วใน Pair Trading)
+  const [orderA, orderB] = await Promise.all([
+    exchange.createOrder(pair.assetA, 'market', sideA, quantity),
+    exchange.createOrder(pair.assetB, 'market', sideB, quantity)
+  ]);
+
+  // บันทึกลง Neon
+  await db.insert(tradeHistory).values({
+    pairId: pair.id,
+    side: type,
+    entryPriceA: orderA.price || orderA.average,
+    entryPriceB: orderB.price || orderB.average,
+    status: 'open'
+  });
+}
+
+```
+
+---
+
+### 3. การจัดการความเสี่ยง (Risk Management)
+
+ในการเทรดจริงปี 2026 คุณห้ามใช้ Fix Quantity (เช่น 0.01) ตลอดไปครับ ควรเพิ่ม Logic **Position Sizing**:
+
+* **Equal Value:** คำนวณให้มูลค่า USD ของทั้ง 2 ฝั่งเท่ากัน เช่น ซื้อ BTC $500 และขาย ETH $500 เพื่อให้พอร์ตสมดุล
+* **Slippage Protection:** ใน Code ควรเช็คค่า Spread ของ Bid/Ask ก่อนสั่งเทรด ถ้าช่องว่างราคาห่างเกินไป (High Slippage) ให้ Bot ระงับการเทรดชั่วคราว
+
+---
+
+### 4. ทำให้เป็น "Auto" ด้วย Cron Job
+
+เพื่อให้ API นี้ทำงานเองทุกๆ 1-5 นาที คุณมี 2 ทางเลือกบน Next.js:
+
+1. **Vercel Cron:** ตั้งค่าใน `vercel.json` เพื่อเรียก `/api/trade` ตามเวลาที่กำหนด (ฟรีและสะดวกมาก)
+2. **Upstash Workflow:** เหมาะสำหรับ Logic ที่ซับซ้อนกว่า เช่น ถ้าออเดอร์ A สำเร็จแต่ออเดอร์ B พลาด ให้ทำระบบแก้พอร์ตอัตโนมัติ
+
+---
+
+### 🛡️ ข้อควรระวังใน Phase นี้
+
+* **Execution Risk:** บางครั้ง Exchange อาจรับออเดอร์ A แต่ปฏิเสธ B (เช่น เงินไม่พอ) คุณควรเขียน `try-catch` แยกตัว เพื่อให้ระบบแจ้งเตือนทันทีหากสถานะพอร์ต "ไม่สมดุล"
+* **API Rate Limit:** หากเทรดหลายคู่พร้อมกัน ต้องระวังการสั่ง Order รัวๆ จนโดนแบน
+

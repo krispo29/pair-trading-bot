@@ -1,0 +1,103 @@
+
+
+### 1. โครงสร้างหน้า Dashboard (Layout)
+
+หน้าจอที่ดีควรแบ่งออกเป็น 3 ส่วนหลักเพื่อให้คุณตัดสินใจได้ทันท่วงที:
+
+* **Header Stats:** แสดงยอดเงินคงเหลือ (Balance) และกำไร/ขาดทุนรวม (Total P&L)
+* **The Signal Chart:** กราฟเส้น Z-Score เพื่อดูว่าตอนนี้ค่า Spread กำลังวิ่งเข้าหาจุดกลับตัวหรือยัง
+* **Active Positions & Controls:** ตารางแสดงออเดอร์ที่เปิดค้างไว้ และปุ่มควบคุม Bot
+
+---
+
+### 2. การสร้างกราฟ Z-Score (The Visualization)
+
+เราจะใช้ `lightweight-charts` เพราะเป็น Library ที่เบาและลื่นที่สุดสำหรับข้อมูลการเทรดครับ
+
+**ไฟล์: `src/components/ZScoreChart.tsx**`
+
+```tsx
+'use client';
+import { createChart, ColorType } from 'lightweight-charts';
+import { useEffect, useRef } from 'react';
+
+export const ZScoreChart = ({ data }: { data: any[] }) => {
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+
+    const chart = createChart(chartContainerRef.current, {
+      layout: { background: { type: ColorType.Solid, color: '#000000' }, textColor: '#d1d4dc' },
+      width: chartContainerRef.current.clientWidth,
+      height: 300,
+    });
+
+    const lineSeries = chart.addLineSeries({ color: '#2962FF' });
+    lineSeries.setData(data); // ข้อมูล { time: '...', value: zScore }
+
+    // วาดเส้น Baseline (0) และ Thresholds (+2, -2)
+    const upperLimit = chart.addLineSeries({ color: '#ef5350', lineStyle: 2 });
+    const lowerLimit = chart.addLineSeries({ color: '#26a69a', lineStyle: 2 });
+
+    return () => chart.remove();
+  }, [data]);
+
+  return <div ref={chartContainerRef} className="w-full h-[300px]" />;
+};
+
+```
+
+---
+
+### 3. ตาราง Active Positions (เชื่อมต่อกับ Neon DB)
+
+เราจะดึงข้อมูลจากตาราง `trade_history` ใน Neon มาแสดงผล พร้อมคำนวณกำไรแบบสดๆ
+
+| Asset Pair | Side | Entry Price (A/B) | Current P&L | Action |
+| --- | --- | --- | --- | --- |
+| BTC / ETH | Long Spread | 65,000 / 3,500 | +$12.50 | [Close Now] |
+| SOL / AVAX | Short Spread | 145 / 35 | -$2.10 | [Close Now] |
+
+---
+
+### 4. ปุ่ม Panic Close (The "Kill Switch")
+
+นี่คือฟีเจอร์ที่สำคัญที่สุดเพื่อความปลอดภัย เมื่อตลาดเกิดความผิดปกติ (เช่น Flash Crash) คุณต้องมีปุ่มที่กดปุ๊บ แล้วสั่งปิดทุกออเดอร์ใน Exchange ทันที
+
+**API Route ตัวอย่าง: `src/app/api/trade/panic-close/route.ts**`
+
+```typescript
+export async function POST() {
+  const exchange = await getExchangeClient();
+  
+  // 1. ดึง Open Positions จาก Exchange จริง
+  const positions = await exchange.fetchPositions();
+  
+  // 2. สั่ง Market Close ทุกไม้ที่มี
+  for (const pos of positions) {
+    await exchange.createOrder(pos.symbol, 'market', pos.side === 'long' ? 'sell' : 'buy', Math.abs(pos.amount));
+  }
+
+  // 3. อัปเดตสถานะใน Database เป็น 'closed'
+  await db.update(tradeHistory).set({ status: 'closed' }).where(eq(tradeHistory.status, 'open'));
+
+  return Response.json({ message: 'All positions closed successfully' });
+}
+
+```
+
+---
+
+### 5. การทำให้หน้าจอสดใหม่อยู่เสมอ (Real-time Strategy)
+
+ในปี 2026 คุณไม่ต้องกด Refresh หน้าจอเองแล้วครับ ผมแนะนำให้ใช้:
+
+* **SWR (Vercel):** สำหรับทำ Auto-polling (เช่น ทุกๆ 5 วินาที) เพื่อไปดึงค่า Z-Score ใหม่จาก API มาอัปเดตกราฟ
+* **Optimistic UI:** เมื่อกด "Start Bot" ให้ปุ่มเปลี่ยนสถานะทันทีในหน้าจอ ก่อนที่ Database จะตอบกลับมา เพื่อความรู้สึกลื่นไหล (Snappy UI)
+
+---
+
+
+
+

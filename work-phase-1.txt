@@ -1,0 +1,151 @@
+ลุยกันเลยครับ! **Phase 1** คือการปูรากฐานให้ "แน่น" และ "ปลอดภัย" เพราะถ้าเราเก็บ API Keys ไม่ดี หรือเชื่อมต่อ Database ไม่เสถียร ระบบเทรดอัตโนมัติจะกลายเป็นฝันร้ายทันที
+
+ในเฟสนี้เราจะโฟกัสที่ 3 ส่วนหลัก: **การตั้งค่า Neon + Drizzle**, **ระบบเข้ารหัส API Keys**, และ **การเชื่อมต่อ Exchange** ครับ
+
+---
+
+### 1. การเตรียม Environment (.env)
+
+ก่อนอื่น ต้องเตรียม "ที่เก็บความลับ" ในไฟล์ `.env.local` ของคุณก่อนครับ
+
+```bash
+# Neon Connection String
+DATABASE_URL=postgresql://user:password@ep-name.region.aws.neon.tech/neondb
+
+# Encryption Key (ต้องเก็บเป็นความลับสุดยอด! ยาว 32 ตัวอักษรสำหรับ AES-256)
+ENCRYPTION_KEY=your-super-secret-32-char-key-here
+
+# Exchange Keys (สำหรับทดสอบเบื้องต้น)
+BINANCE_API_KEY=your_api_key
+BINANCE_SECRET=your_secret
+
+```
+
+---
+
+### 2. การเชื่อมต่อ Neon ด้วย Drizzle ORM
+
+เราจะใช้ `@neondatabase/serverless` เพื่อการเชื่อมต่อที่รวดเร็วผ่าน HTTP ซึ่งเหมาะกับ Next.js มากครับ
+
+**ไฟล์: `src/lib/db.ts**`
+
+```typescript
+import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-http';
+import * as schema from '@/db/schema';
+
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is missing');
+}
+
+const sql = neon(process.env.DATABASE_URL);
+export const db = drizzle(sql, { schema });
+
+```
+
+---
+
+### 3. ระบบความปลอดภัย (Encryption Module)
+
+นี่คือส่วนที่สำคัญที่สุดครับ เราจะไม่เก็บ API Key ตรงๆ ลงฐานข้อมูล แต่จะทำการเข้ารหัส (Encrypt) ก่อนเสมอ เพื่อป้องกันกรณี Data Leak
+
+**ไฟล์: `src/lib/encryption.ts**`
+
+```typescript
+import crypto from 'crypto';
+
+const ALGORITHM = 'aes-256-cbc';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!; // 32 characters
+const IV_LENGTH = 16; 
+
+export function encrypt(text: string) {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text);
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+export function decrypt(text: string) {
+  const textParts = text.split(':');
+  const iv = Buffer.from(textParts.shift()!, 'hex');
+  const encryptedText = Buffer.from(textParts.join(':'), 'hex');
+  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  return decrypted.toString();
+}
+
+```
+
+---
+
+### 4. การเชื่อมต่อ Exchange (CCXT Client)
+
+เราจะสร้างฟังก์ชันกลางเพื่อดึงข้อมูลจาก Exchange โดยใช้ค่าที่ Decrypt ออกมาครับ
+
+**ไฟล์: `src/lib/exchange.ts**`
+
+```typescript
+import ccxt from 'ccxt';
+import { decrypt } from './encryption';
+
+export async function getExchangeClient(encryptedKey: string, encryptedSecret: string) {
+  return new ccxt.binance({
+    apiKey: decrypt(encryptedKey),
+    secret: decrypt(encryptedSecret),
+    options: {
+      adjustForTimeDifference: true, // แก้ปัญหา Time Sync ของเซิร์ฟเวอร์
+    },
+  });
+}
+
+```
+
+---
+
+### 5. API ทดสอบการเชื่อมต่อ (Health Check)
+
+ลองสร้าง API Route เพื่อเช็คว่าทุกอย่างที่ทำมานั้น Work หรือไม่
+
+**ไฟล์: `src/app/api/health/route.ts**`
+
+```typescript
+import { NextResponse } from 'next/server';
+import { getExchangeClient } from '@/lib/exchange';
+
+export async function GET() {
+  try {
+    // สมมติว่าดึง Key ที่เข้ารหัสมาจาก DB (ในที่นี้ลอง Encrypt สดๆ เพื่อทดสอบ)
+    // ในงานจริงคุณจะดึงจาก db.select().from(exchangeConfig)...
+    
+    // ทดสอบดึง Balance
+    const exchange = new ccxt.binance({
+      apiKey: process.env.BINANCE_API_KEY,
+      secret: process.env.BINANCE_SECRET,
+    });
+    
+    const balance = await exchange.fetchBalance();
+    
+    return NextResponse.json({ 
+      status: 'Connected', 
+      totalUSDT: balance.total['USDT'] 
+    });
+  } catch (error: any) {
+    return NextResponse.json({ status: 'Error', message: error.message }, { status: 500 });
+  }
+}
+
+```
+
+---
+
+### 💡 สรุปสิ่งที่คุณทำเสร็จในเฟสนี้
+
+1. **Database Ready:** เชื่อมต่อ Neon ผ่าน Drizzle พร้อมใช้งาน
+2. **Security First:** มีระบบ AES-256 เข้ารหัส Key ก่อนลง DB
+3. **Exchange Bridge:** พร้อมสั่งงานผ่าน CCXT
+
+> **ข้อควรระวัง:** อย่าลืมใส่ `ENCRYPTION_KEY` ใน Vercel Dashboard ตอน Deploy ด้วยนะครับ ถ้าลืมหรือเปลี่ยน Key นี้ทีหลัง คุณจะไม่สามารถอ่าน API Keys เดิมในฐานข้อมูลได้เลย!
+
+**คุณอยากให้ผมช่วยเขียนไฟล์ `drizzle.config.ts` เพื่อรัน Migration เข้า Neon เลยไหมครับ หรือจะข้ามไปลุย Phase 2 เรื่องการคำนวณ Z-Score ต่อดี?**

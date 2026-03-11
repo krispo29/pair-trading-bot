@@ -1,0 +1,144 @@
+ยินดีครับ **Phase 2** คือหัวใจสำคัญของโปรเจกต์ เพราะเป็นส่วนที่เปลี่ยนจาก "การเชื่อมต่อ" เป็น "การวิเคราะห์" เราจะสร้าง **Logic** ที่ใช้ประมวลผลว่าราคาในตลาดตอนนี้ "น่าเทรด" หรือยัง โดยใช้สถิติเป็นตัวนำทางครับ
+
+ในเฟสนี้เราจะทำ 3 ส่วนหลัก: **ดึงข้อมูลย้อนหลัง**, **คำนวณ Spread**, และ **หาค่า Z-Score** ครับ
+
+---
+
+### 1. สูตรการคำนวณ (The Math)
+
+ก่อนจะเขียน Code เราต้องเข้าใจสูตรที่เราจะใช้ก่อนครับ ในการทำ Pair Trading เราไม่ได้ดูราคาตรงๆ แต่ดู **Spread**
+
+* **Spread:** ส่วนต่างราคาระหว่างสินทรัพย์ A และ B (แบบสัดส่วน)
+
+$$Spread = \ln(Price_A) - \ln(Price_B)$$
+
+
+
+*(การใช้ Log ช่วยให้เราดูการเปลี่ยนแปลงเป็น % ซึ่งเสถียรกว่าราคาดิบ)*
+* **Z-Score:** ตัวบอกว่า Spread ปัจจุบัน ห่างจากค่าเฉลี่ยไปกี่เท่าของส่วนเบี่ยงเบนมาตรฐาน
+
+$$Z = \frac{Spread - \mu}{\sigma}$$
+
+
+
+*(โดยที่ $\mu$ คือค่าเฉลี่ย และ $\sigma$ คือ Standard Deviation)*
+
+---
+
+### 2. เขียน Logic คำนวณใน `src/lib/math.ts`
+
+เราจะสร้างฟังก์ชันที่รับตัวเลขชุดหนึ่ง (Historical Prices) แล้วพ่นค่า Z-Score ออกมาครับ
+
+```typescript
+export function calculateZScore(pricesA: number[], pricesB: number[]) {
+  // 1. คำนวณ Log Spread ของข้อมูลย้อนหลังทั้งหมด
+  const spreads = pricesA.map((pA, i) => Math.log(pA) - Math.log(pricesB[i]));
+
+  // 2. หาค่าเฉลี่ย (Mean) ของ Spread
+  const mean = spreads.reduce((a, b) => a + b, 0) / spreads.length;
+
+  // 3. หา Standard Deviation (SD)
+  const squareDiffs = spreads.map((s) => Math.pow(s - mean, 2));
+  const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / squareDiffs.length;
+  const stdDev = Math.sqrt(avgSquareDiff);
+
+  // 4. คำนวณ Z-Score ของ Spread ตัวล่าสุด
+  const currentSpread = spreads[spreads.length - 1];
+  const zScore = (currentSpread - mean) / stdDev;
+
+  return {
+    zScore: parseFloat(zScore.toFixed(2)),
+    mean,
+    stdDev,
+    currentSpread
+  };
+}
+
+```
+
+---
+
+### 3. ระบบดึงข้อมูลตลาด (Market Data Fetcher)
+
+เราต้องดึงข้อมูลย้อนหลัง (OHLCV) มาประมาณ 100 แท่ง เพื่อใช้เป็นฐานในการคำนวณค่าเฉลี่ย
+
+**ไฟล์: `src/lib/market.ts**`
+
+```typescript
+import { getExchangeClient } from './exchange';
+
+export async function getPairData(exchange: any, symbolA: string, symbolB: string) {
+  // ดึงข้อมูลย้อนหลัง 100 แท่ง (Timeframe 1h หรือ 15m แล้วแต่กลยุทธ์)
+  const [ohlcvA, ohlcvB] = await Promise.all([
+    exchange.fetchOHLCV(symbolA, '1h', undefined, 100),
+    exchange.fetchOHLCV(symbolB, '1h', undefined, 100),
+  ]);
+
+  // ดึงเฉพาะราคาปิด (Close Price - Index 4 ใน OHLCV)
+  const pricesA = ohlcvA.map((d: any) => d[4]);
+  const pricesB = ohlcvB.map((d: any) => d[4]);
+
+  return { pricesA, pricesB };
+}
+
+```
+
+---
+
+### 4. รวมร่างใน API Route
+
+คราวนี้มาลองสร้าง API ที่เรียกใช้ทั้งข้อมูลตลาดและสูตรคำนวณ แล้วแสดงผลออกมาครับ
+
+**ไฟล์: `src/app/api/analyze/route.ts**`
+
+```typescript
+import { NextResponse } from 'next/server';
+import ccxt from 'ccxt';
+import { getPairData } from '@/lib/market';
+import { calculateZScore } from '@/lib/math';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const assetA = searchParams.get('a') || 'BTC/USDT';
+  const assetB = searchParams.get('b') || 'ETH/USDT';
+
+  try {
+    const exchange = new ccxt.binance(); // ใช้ Public API ไม่ต้องใช้ Key สำหรับดึงราคา
+    
+    // 1. ดึงข้อมูลราคา
+    const { pricesA, pricesB } = await getPairData(exchange, assetA, assetB);
+    
+    // 2. คำนวณ Z-Score
+    const analysis = calculateZScore(pricesA, pricesB);
+
+    // 3. วิเคราะห์สัญญาณเบื้องต้น
+    let signal = 'WAIT';
+    if (analysis.zScore > 2.0) signal = 'SHORT SPREAD (Sell A, Buy B)';
+    if (analysis.zScore < -2.0) signal = 'LONG SPREAD (Buy A, Sell B)';
+
+    return NextResponse.json({
+      pair: `${assetA} vs ${assetB}`,
+      ...analysis,
+      signal
+    });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+```
+
+---
+
+### 💡 สิ่งที่ควรทำต่อใน Phase นี้
+
+* **Database Sync:** เมื่อคำนวณ Z-Score ได้แล้ว ให้ลองเขียนคำสั่ง `db.update(tradingPairs)...` เพื่อเก็บค่า `lastZScore` ลงใน Neon ของคุณ
+* **Lookback Period:** ลองปรับค่าย้อนหลัง (100 แท่ง, 200 แท่ง) ดูว่าแบบไหนให้สัญญาณที่เสถียรกว่ากัน
+* **Validation:** ตรวจสอบว่าคู่เหรียญที่เลือกมี **Correlation** สูงจริงไหม (ถ้า Correlation ต่ำ Z-Score จะแกว่งจนเทรดไม่ได้)
+
+---
+
+**ตอนนี้คุณมี "สมอง" ของ Bot แล้วครับ!**
+ใน **Phase 3** เราจะเอา Logic นี้ไปใส่ใน **Trading Engine** เพื่อให้มันสั่งออเดอร์จริงผ่าน API Key ที่เราเข้ารหัสไว้ใน Phase 1
+
+**คุณอยากให้ผมเจาะลึกเรื่อง "การคำนวณหาค่าความสัมพันธ์ (Correlation) เพิ่มเติม" เพื่อคัดกรองคู่เทรด หรือจะข้ามไปลุย "Phase 3: การส่งคำสั่งซื้อขายจริง" เลยดีครับ?**
