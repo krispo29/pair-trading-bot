@@ -8,6 +8,7 @@ export const tradingPairs = pgTable('trading_pairs', {
   isActive: boolean('is_active').default(false),
   upperThreshold: doublePrecision('upper_threshold').default(2.0), // Z-Score Sell
   lowerThreshold: doublePrecision('lower_threshold').default(-2.0), // Z-Score Buy
+  totalBudget: doublePrecision('total_budget').default(100.0), // งบประมาณรวมสำหรับคู่นี้ (USD)
   lastZScore: doublePrecision('last_z_score'),
   aiReason: text('ai_reason'),
   isProcessing: boolean('is_processing').default(false), // ระบบ Lock
@@ -22,6 +23,8 @@ export const tradeHistory = pgTable('trade_history', {
   side: text('side').notNull(), 
   entryPriceA: doublePrecision('entry_price_a'),
   entryPriceB: doublePrecision('entry_price_b'),
+  qtyA: doublePrecision('qty_a'), // จำนวนที่เทรดจริงของ A
+  qtyB: doublePrecision('qty_b'), // จำนวนที่เทรดจริงของ B
   orderIdA: text('order_id_a'), // เก็บ ID จาก Exchange จริง
   orderIdB: text('order_id_b'),
   status: text('status').default('open'), 

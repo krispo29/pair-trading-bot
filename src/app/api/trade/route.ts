@@ -107,8 +107,28 @@ async function processTrade() {
 
             if (absZ >= entryThreshold) {
                 console.log(`   🎯 Signal detected! Z=${zScore.toFixed(2)} Target=${entryThreshold}`);
-                // ... (Logic การเทรดเดิม)
-                // เพื่อให้สั้น ผมจะข้ามส่วนข้างในที่ยังเหมือนเดิมไป แต่คุณยังเห็น Log ที่ผมเพิ่มใหม่ครับ
+                
+                const isPaper = process.env.TRADING_MODE === 'PAPER';
+                const marketA = exchange.market(pair.assetA);
+                const marketB = exchange.market(pair.assetB);
+                
+                const { qtyA, qtyB } = calculatePositionSizes(
+                    pair.totalBudget || 100,
+                    pricesA[pricesA.length - 1],
+                    pricesB[pricesB.length - 1],
+                    marketA,
+                    marketB
+                );
+
+                if (zScore >= entryThreshold) {
+                    // Short Spread: Sell A, Buy B
+                    await executeAtomicTradeDefensive(exchange, pair, 'SHORT_SPREAD', 'sell', 'buy', qtyA, qtyB, isPaper);
+                    results.push({ pair: `${pair.assetA}/${pair.assetB}`, action: 'ENTRY', reason: 'Upper Threshold Reached' });
+                } else {
+                    // Long Spread: Buy A, Sell B
+                    await executeAtomicTradeDefensive(exchange, pair, 'LONG_SPREAD', 'buy', 'sell', qtyA, qtyB, isPaper);
+                    results.push({ pair: `${pair.assetA}/${pair.assetB}`, action: 'ENTRY', reason: 'Lower Threshold Reached' });
+                }
             }
 
             await db.update(tradingPairs).set({ lastZScore: zScore, updatedAt: new Date() }).where(eq(tradingPairs.id, pair.id));
@@ -164,7 +184,9 @@ async function executeAtomicTradeDefensive(exchange: any, pair: any, type: strin
   }
   const history = await db.insert(tradeHistory).values({
     pairId: pair.id, side: type, entryPriceA: (orderA as any).average || (orderA as any).price,
-    entryPriceB: (orderB as any).average || (orderB as any).price, orderIdA: (orderA as any).id, orderIdB: (orderB as any).id,
+    entryPriceB: (orderB as any).average || (orderB as any).price, 
+    qtyA: qtyA, qtyB: qtyB,
+    orderIdA: (orderA as any).id, orderIdB: (orderB as any).id,
     status: 'open', isPaper: isPaper, createdAt: new Date()
   }).returning();
   return { tradeId: history[0].id };
@@ -172,13 +194,44 @@ async function executeAtomicTradeDefensive(exchange: any, pair: any, type: strin
 
 async function closeTradeDefensive(exchange: any, pair: any, openTrade: any, reason: string) {
   const isPaper = process.env.TRADING_MODE === 'PAPER';
+  const qtyA = openTrade.qtyA || 0.01; // fallback if data is missing
+  const qtyB = openTrade.qtyB || 0.01;
+
   if (!isPaper) {
     const sideA = openTrade.side === 'LONG_SPREAD' ? 'sell' : 'buy';
     const sideB = openTrade.side === 'LONG_SPREAD' ? 'buy' : 'sell';
     await Promise.all([
-        exchange.createOrder(pair.assetA, 'market', sideA, 0.001), 
-        exchange.createOrder(pair.assetB, 'market', sideB, 0.01)
+        exchange.createOrder(pair.assetA, 'market', sideA, qtyA), 
+        exchange.createOrder(pair.assetB, 'market', sideB, qtyB)
     ]);
+  } else {
+    // Paper mode profit calculation and balance return
+    const tickers = await exchange.fetchTickers([pair.assetA, pair.assetB]);
+    const exitPriceA = tickers[pair.assetA].last;
+    const exitPriceB = tickers[pair.assetB].last;
+
+    // Simplified PnL for paper trade
+    let pnl = 0;
+    if (openTrade.side === 'LONG_SPREAD') {
+        // Buy A, Sell B
+        pnl = (exitPriceA - openTrade.entryPriceA) * qtyA + (openTrade.entryPriceB - exitPriceB) * qtyB;
+    } else {
+        // Sell A, Buy B
+        pnl = (openTrade.entryPriceA - exitPriceA) * qtyA + (exitPriceB - openTrade.entryPriceB) * qtyB;
+    }
+
+    // Return the value to paper wallet
+    const currentValA = qtyA * exitPriceA;
+    const currentValB = qtyB * exitPriceB;
+    
+    await db.update(paperBalances)
+      .set({ 
+        balance: sql`${paperBalances.balance} + ${openTrade.qtyA * openTrade.entryPriceA + openTrade.qtyB * openTrade.entryPriceB} + ${pnl}`,
+        updatedAt: new Date() 
+      })
+      .where(eq(paperBalances.asset, 'USDT'));
+      
+    await db.update(tradeHistory).set({ pnl: pnl }).where(eq(tradeHistory.id, openTrade.id));
   }
   await db.transaction(async (tx) => {
     await tx.update(tradeHistory).set({ status: 'closed', updatedAt: new Date() }).where(eq(tradeHistory.id, openTrade.id));

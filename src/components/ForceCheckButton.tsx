@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 
-export const ForceCheckButton = () => {
+export const ForceCheckButton = ({ onComplete }: { onComplete?: () => void }) => {
   const [loading, setLoading] = useState(false);
 
   const handleForceCheck = async () => {
@@ -11,7 +11,12 @@ export const ForceCheckButton = () => {
       const res = await fetch('/api/trade');
       const data = await res.json();
       console.log('Bot Check Result:', data);
-      window.location.reload(); // Refresh to see new Z-Score on chart
+      
+      if (onComplete) {
+        onComplete();
+      } else {
+        window.location.reload(); 
+      }
     } catch (err) {
       console.error('Failed to trigger bot:', err);
       alert('Failed to trigger bot check');
