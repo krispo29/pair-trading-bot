@@ -27,22 +27,24 @@ export default async function DashboardPage() {
     .limit(5);
 
   const anyActive = pairs.some(p => p.isActive);
-  const activePair = pairs.find(p => p.isActive);
+  const activePairs = pairs.filter(p => p.isActive);
 
-  // ดึงประวัติ Z-Score จริงจาก Database (จำกัด 50 จุดล่าสุด)
-  let chartData: { time: number; value: number }[] = [];
-  if (activePair) {
+  // ดึงประวัติ Z-Score สำหรับทุกคู่ที่ active
+  const chartsData = await Promise.all(activePairs.map(async (pair) => {
     const history = await db.select()
       .from(zScoreHistory)
-      .where(eq(zScoreHistory.pairId, activePair.id))
+      .where(eq(zScoreHistory.pairId, pair.id))
       .orderBy(desc(zScoreHistory.createdAt))
       .limit(50);
     
-    chartData = history.map(h => ({
-      time: Math.floor(new Date(h.createdAt!).getTime() / 1000),
-      value: h.zScore
-    })).reverse();
-  }
+    return {
+      pair,
+      data: history.map(h => ({
+        time: Math.floor(new Date(h.createdAt!).getTime() / 1000),
+        value: h.zScore
+      })).reverse()
+    };
+  }));
 
   // คำนวณกำไรเบื้องต้น
   const totalPnL = recentTrades.reduce((sum, trade) => sum + Number.parseFloat(String(trade.pnl || '0')), 0);
@@ -118,19 +120,21 @@ export default async function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column: Charts & History */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm">
-              <h3 className="text-lg font-bold mb-6 flex items-center gap-2 text-slate-100">
-                <Activity size={20} className="text-blue-400" /> Live Z-Score Monitoring {activePair && <span className="text-xs font-normal text-slate-500">({activePair.assetA}/{activePair.assetB})</span>}
-              </h3>
-              {chartData.length > 0 ? (
-                <ZScoreChart data={chartData} />
-              ) : (
-                <div className="h-[350px] flex flex-col items-center justify-center bg-slate-800/20 rounded-xl border border-dashed border-slate-700 text-slate-500 italic">
-                  <Activity size={48} className="mb-4 opacity-20" />
-                  <p>No Z-Score history yet. Start the bot to begin monitoring.</p>
+            {chartsData.length > 0 ? (
+              chartsData.map(({ pair, data }) => (
+                <div key={pair.id} className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm">
+                  <ZScoreChart 
+                    data={data} 
+                    title={`Z-Score Monitoring (${pair.assetA}/${pair.assetB})`}
+                  />
                 </div>
-              )} 
-            </div>
+              ))
+            ) : (
+              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm h-[350px] flex flex-col items-center justify-center text-slate-500 italic">
+                <Activity size={48} className="mb-4 opacity-20" />
+                <p>No active pairs. Start a bot to begin monitoring.</p>
+              </div>
+            )}
 
             {/* Trade History Table */}
             <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 overflow-hidden">

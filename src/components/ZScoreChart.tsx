@@ -7,7 +7,7 @@ interface ZScoreDataPoint {
   value: number;
 }
 
-export const ZScoreChart = ({ data }: { data: ZScoreDataPoint[] }) => {
+export const ZScoreChart = ({ data, title = 'Z-Score Analysis (Real-time)' }: { data: ZScoreDataPoint[]; title?: string }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,7 +83,7 @@ export const ZScoreChart = ({ data }: { data: ZScoreDataPoint[] }) => {
     <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-lg">
       <h3 className="text-slate-200 text-sm font-semibold mb-4 flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-        Z-Score Analysis (Real-time)
+        {title}
       </h3>
       <div ref={chartContainerRef} className="w-full h-[350px]" />
     </div>

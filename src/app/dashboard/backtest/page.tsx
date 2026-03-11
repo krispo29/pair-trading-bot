@@ -150,10 +150,10 @@ export default function BacktestPage() {
 
                 {/* Chart */}
                 <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
-                  <h3 className="text-lg font-bold mb-6 flex items-center gap-2 text-slate-100">
-                    <Activity size={20} className="text-blue-400" /> Z-Score Backtest History
-                  </h3>
-                  <ZScoreChart data={results.zScores} />
+                  <ZScoreChart 
+                    data={results.zScores} 
+                    title={`Z-Score Backtest History (${params.assetA}/${params.assetB})`}
+                  />
                 </div>
 
                 {/* Trade List */}
