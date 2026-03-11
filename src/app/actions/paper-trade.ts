@@ -47,6 +47,39 @@ export async function topUpPaperBalance(amount: number) {
 }
 
 /**
+ * กำหนดยอดเงินสมมติเป็นตัวเลขที่ระบุ
+ */
+export async function setPaperBalance(amount: number) {
+    try {
+        if (amount < 0) throw new Error("Amount cannot be negative");
+
+        const result = await db
+          .insert(paperBalances)
+          .values({
+            asset: "USDT",
+            balance: amount,
+          })
+          .onConflictDoUpdate({
+            target: paperBalances.asset,
+            set: {
+              balance: amount,
+              updatedAt: new Date(),
+            },
+          })
+          .returning();
+    
+        revalidatePath("/dashboard/settings/paper-trade");
+        return { 
+            success: true, 
+            message: `Virtual wallet set to $${amount.toLocaleString()}.`,
+            currentBalance: result[0].balance 
+        };
+      } catch (error: any) {
+        return { success: false, message: error.message || "Failed to set wallet." };
+      }
+}
+
+/**
  * รีเซ็ตยอดเงินสมมติเป็นค่าเริ่มต้น ($10,000)
  */
 export async function resetPaperBalance() {

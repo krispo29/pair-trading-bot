@@ -1,40 +1,89 @@
 import { db } from '@/lib/db';
-import { tradingPairs, tradeHistory } from '@/db/schema';
+import { tradingPairs, tradeHistory, zScoreHistory } from '@/db/schema';
 import { eq, desc } from 'drizzle-orm';
-import { Activity, TrendingUp, AlertTriangle, Zap, Power } from 'lucide-react';
+import { Activity, TrendingUp, AlertTriangle, Zap, Settings } from 'lucide-react';
 import { ZScoreChart } from '@/components/ZScoreChart';
 import { PanicButton } from '@/components/PanicButton';
 import { BotStatusCard } from '@/components/BotStatusCard';
+import { BotControlGroup } from '@/components/BotControlGroup';
+import { AddPairModal } from '@/components/AddPairModal';
+import { ScannerModal } from '@/components/ScannerModal';
+import { RealBalance } from '@/components/RealBalance';
+import { PaperBalance } from '@/components/PaperBalance';
+import { getPaperBalance } from '@/app/actions/get-balance';
+import { ForceCheckButton } from '@/components/ForceCheckButton';
+import Link from 'next/link';
+import Image from 'next/image';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
   // 1. ดึงข้อมูลจาก Neon DB แบบ Server-side
   const pairs = await db.select().from(tradingPairs);
+  const paperBalanceValue = await getPaperBalance();
   const recentTrades = await db.select()
     .from(tradeHistory)
     .orderBy(desc(tradeHistory.createdAt))
     .limit(5);
 
+  const anyActive = pairs.some(p => p.isActive);
+  const activePair = pairs.find(p => p.isActive);
+
+  // ดึงประวัติ Z-Score จริงจาก Database (จำกัด 50 จุดล่าสุด)
+  let chartData: { time: number; value: number }[] = [];
+  if (activePair) {
+    const history = await db.select()
+      .from(zScoreHistory)
+      .where(eq(zScoreHistory.pairId, activePair.id))
+      .orderBy(desc(zScoreHistory.createdAt))
+      .limit(50);
+    
+    chartData = history.map(h => ({
+      time: Math.floor(new Date(h.createdAt!).getTime() / 1000),
+      value: h.zScore
+    })).reverse();
+  }
+
   // คำนวณกำไรเบื้องต้น
-  const totalPnL = recentTrades.reduce((sum, trade) => sum + parseFloat(String(trade.pnl || '0')), 0);
+  const totalPnL = recentTrades.reduce((sum, trade) => sum + Number.parseFloat(String(trade.pnl || '0')), 0);
 
   return (
     <div className="min-h-screen bg-black text-slate-200 p-6 font-sans">
       <div className="max-w-7xl mx-auto">
         {/* Header Section */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-          <div>
-            <h1 className="text-3xl font-extrabold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-              QuantBot Dashboard 2026
-            </h1>
-            <p className="text-slate-500 text-sm mt-1">Pair Trading Strategy • Delta Neutral • High Frequency</p>
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 bg-slate-900/40 p-6 rounded-3xl border border-slate-800 backdrop-blur-md">
+          <div className="flex items-center gap-6">
+            <div className="relative group">
+              <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-emerald-500 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 group-hover:duration-200"></div>
+              <Image 
+                src="/logo.png" 
+                alt="QuantBot Logo" 
+                width={64} 
+                height={64} 
+                className="relative rounded-2xl border border-slate-700 shadow-2xl"
+              />
+            </div>
+            <div>
+              <h1 className="text-3xl font-extrabold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent tracking-tight">
+                QuantBot Dashboard 2026
+              </h1>
+              <p className="text-slate-500 text-sm mt-1 font-medium">Pair Trading Strategy • Professional Edition</p>
+            </div>
+            <div className="hidden md:block h-10 w-px bg-slate-800" />
+            <RealBalance />
+            <div className="hidden md:block h-10 w-px bg-slate-800" />
+            <PaperBalance initialBalance={paperBalanceValue} />
           </div>
           <div className="flex gap-3">
+            <ForceCheckButton />
+            <Link 
+              href="/dashboard/settings/paper-trade"
+              className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2.5 rounded-xl flex items-center gap-2 transition-all font-bold border border-slate-700"
+            >
+              <Settings size={18} /> Paper Settings
+            </Link>
             <PanicButton />
-            <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 transition-all font-bold shadow-lg shadow-emerald-900/20 active:scale-95">
-              <Power size={18} /> Start All Bots
-            </button>
+            <BotControlGroup anyActive={anyActive} />
           </div>
         </header>
 
@@ -71,17 +120,16 @@ export default async function DashboardPage() {
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm">
               <h3 className="text-lg font-bold mb-6 flex items-center gap-2 text-slate-100">
-                <Activity size={20} className="text-blue-400" /> Live Z-Score Monitoring
+                <Activity size={20} className="text-blue-400" /> Live Z-Score Monitoring {activePair && <span className="text-xs font-normal text-slate-500">({activePair.assetA}/{activePair.assetB})</span>}
               </h3>
-              {/* ส่งข้อมูลจำลองไปก่อนในขั้นตอนนี้ */}
-              <ZScoreChart data={[
-                { time: '2026-03-11 08:00', value: 0.1 },
-                { time: '2026-03-11 09:00', value: 1.4 },
-                { time: '2026-03-11 10:00', value: 0.5 },
-                { time: '2026-03-11 11:00', value: -1.2 },
-                { time: '2026-03-11 12:00', value: -2.1 },
-                { time: '2026-03-11 13:00', value: -0.8 },
-              ]} /> 
+              {chartData.length > 0 ? (
+                <ZScoreChart data={chartData} />
+              ) : (
+                <div className="h-[350px] flex flex-col items-center justify-center bg-slate-800/20 rounded-xl border border-dashed border-slate-700 text-slate-500 italic">
+                  <Activity size={48} className="mb-4 opacity-20" />
+                  <p>No Z-Score history yet. Start the bot to begin monitoring.</p>
+                </div>
+              )} 
             </div>
 
             {/* Trade History Table */}
@@ -113,8 +161,8 @@ export default async function DashboardPage() {
                         <td className="py-4 text-sm text-slate-500">
                           {trade.entryPriceA?.toFixed(2)} / {trade.entryPriceB?.toFixed(2)}
                         </td>
-                        <td className={`py-4 text-right font-mono font-bold ${parseFloat(String(trade.pnl || '0')) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {parseFloat(String(trade.pnl || '0')) >= 0 ? '+' : ''}{trade.pnl || '0.00'}
+                        <td className={`py-4 text-right font-mono font-bold ${Number.parseFloat(String(trade.pnl || '0')) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {Number.parseFloat(String(trade.pnl || '0')) >= 0 ? '+' : ''}{trade.pnl || '0.00'}
                         </td>
                       </tr>
                     )) : (
@@ -140,7 +188,14 @@ export default async function DashboardPage() {
                 )) : (
                   <div className="text-center p-8 bg-slate-800/20 rounded-xl border border-dashed border-slate-700">
                     <p className="text-slate-500 text-sm">No pairs configured</p>
-                    <button className="text-blue-400 text-xs mt-2 hover:underline">+ Add New Pair</button>
+                    <AddPairModal />
+                    <ScannerModal />
+                  </div>
+                )}
+                {pairs.length > 0 && (
+                  <div className="flex flex-col items-start gap-1">
+                    <AddPairModal />
+                    <ScannerModal />
                   </div>
                 )}
               </div>
@@ -164,7 +219,7 @@ export default async function DashboardPage() {
   );
 }
 
-function StatCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
+function StatCard({ title, value, icon }: Readonly<{ title: string; value: string; icon: React.ReactNode }>) {
   return (
     <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl hover:border-slate-700 transition-all hover:translate-y-[-2px] group">
       <div className="flex justify-between items-start mb-3">

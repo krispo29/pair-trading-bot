@@ -1,19 +1,28 @@
 'use client';
 import { useState } from 'react';
-import { Wallet, Globe, ShieldCheck, RefreshCcw, Plus, TrendingUp, AlertCircle } from 'lucide-react';
-import { topUpPaperBalance, resetPaperBalance } from '@/app/actions/paper-trade';
+import { Wallet, Globe, ShieldCheck, RefreshCcw, Plus, TrendingUp, AlertCircle, ArrowLeft } from 'lucide-react';
+import { topUpPaperBalance, resetPaperBalance, setPaperBalance } from '@/app/actions/paper-trade';
+import Link from 'next/link';
 
 export default function PaperTradeSetup() {
   const [balance, setBalance] = useState(10000);
+  const [customAmount, setCustomAmount] = useState('10000');
   const [selectedExchange, setSelectedExchange] = useState('internal_sim');
   const [isSaving, setIsSaving] = useState(false);
 
-  const handleTopUp = async (amount: number) => {
-    const res = await topUpPaperBalance(amount);
+  const handleUpdateBalance = async () => {
+    const amount = parseFloat(customAmount);
+    if (isNaN(amount)) return alert("Please enter a valid number");
+    
+    setIsSaving(true);
+    const res = await setPaperBalance(amount);
     if (res.success && res.currentBalance !== undefined) {
         setBalance(Number(res.currentBalance));
         alert(res.message);
+    } else {
+        alert(res.message || "Failed to update balance");
     }
+    setIsSaving(false);
   };
 
   const handleReset = async () => {
@@ -39,6 +48,17 @@ export default function PaperTradeSetup() {
     <div className="min-h-screen bg-black text-slate-200 p-8 font-sans">
       <div className="max-w-4xl mx-auto space-y-8">
         
+        {/* Back Button */}
+        <Link 
+          href="/dashboard" 
+          className="inline-flex items-center gap-2 text-slate-500 hover:text-white transition-colors group mb-2"
+        >
+          <div className="p-2 bg-slate-900 rounded-lg group-hover:bg-slate-800 transition-colors">
+            <ArrowLeft size={16} />
+          </div>
+          <span className="text-sm font-bold uppercase tracking-widest">Back to Dashboard</span>
+        </Link>
+
         {/* Header & Status Toggle */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-900/40 p-8 rounded-3xl border border-blue-500/20 backdrop-blur-md gap-4">
           <div>
@@ -72,18 +92,35 @@ export default function PaperTradeSetup() {
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3">
+              <label className="text-[10px] text-slate-500 uppercase font-bold">Set Custom Balance</label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-4 top-3.5 text-slate-500">$</span>
+                  <input 
+                    type="number"
+                    value={customAmount}
+                    onChange={(e) => setCustomAmount(e.target.value)}
+                    className="w-full bg-black border border-slate-700 rounded-xl py-3 pl-8 pr-4 text-white font-bold focus:border-blue-500 outline-none transition"
+                    placeholder="Enter amount"
+                  />
+                </div>
+                <button 
+                  onClick={handleUpdateBalance}
+                  disabled={isSaving}
+                  className="bg-blue-600 hover:bg-blue-500 px-6 rounded-xl font-bold text-sm transition active:scale-95 disabled:opacity-50"
+                >
+                  Update
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3">
               <button 
-                onClick={() => setBalance(prev => prev + 1000)}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 py-3 rounded-xl flex items-center justify-center gap-2 transition font-bold text-sm active:scale-95"
-              >
-                <Plus size={16} /> Add $1,000
-              </button>
-              <button 
-                onClick={() => setBalance(10000)}
+                onClick={handleReset}
                 className="flex-1 bg-rose-500/5 hover:bg-rose-500/10 text-rose-400 py-3 rounded-xl flex items-center justify-center gap-2 transition font-bold text-sm border border-rose-500/10 active:scale-95"
               >
-                <RefreshCcw size={16} /> Reset Funds
+                <RefreshCcw size={16} /> Reset to Default ($10,000)
               </button>
             </div>
           </div>

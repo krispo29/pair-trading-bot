@@ -12,6 +12,7 @@
     "@ai-sdk/google": "^3.0.43",
     "@neondatabase/serverless": "^1.0.2",
     "ai": "^6.0.116",
+    "axios": "^1.13.6",
     "ccxt": "^4.5.42",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.1",

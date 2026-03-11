@@ -1,19 +1,40 @@
 'use client';
-import { Power, Settings2, BarChart2, Lock } from 'lucide-react';
+import { Power, Trash2, BarChart2, Lock } from 'lucide-react';
 import { useState } from 'react';
+import { togglePairStatus } from '@/app/actions/bot';
+import { deletePair } from '@/app/actions/pairs';
 
 export const BotStatusCard = ({ pair }: { pair: any }) => {
   const [isActive, setIsActive] = useState(pair.isActive);
+  const [isDeleting, setIsDeleting] = useState(false);
   const isLocked = pair.isProcessing;
 
   const toggleBot = async () => {
     if (isLocked) return;
-    // ในการใช้งานจริง: เรียก API เพื่ออัปเดตสถานะใน Database
-    setIsActive(!isActive);
+    
+    // อัปเดตผ่าน Server Action
+    const result = await togglePairStatus(pair.id, isActive);
+    if (result.success) {
+      setIsActive(result.isActive);
+    } else {
+      alert("Failed to update bot status: " + result.message);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (isActive) return alert("Please stop the bot before deleting the pair.");
+    if (!confirm(`Are you sure you want to delete ${pair.assetA}/${pair.assetB}? This will also delete its history.`)) return;
+
+    setIsDeleting(true);
+    const result = await deletePair(pair.id);
+    if (!result.success) {
+      alert("Failed to delete pair: " + result.message);
+      setIsDeleting(false);
+    }
   };
 
   return (
-    <div className={`bg-slate-800/40 border p-4 rounded-xl flex justify-between items-center group transition ${isLocked ? 'border-amber-500/50 bg-amber-500/5' : 'border-slate-700 hover:border-slate-600'}`}>
+    <div className={`bg-slate-800/40 border p-4 rounded-xl flex justify-between items-center group transition ${isLocked ? 'border-amber-500/50 bg-amber-500/5' : 'border-slate-700 hover:border-slate-600'} ${isDeleting ? 'opacity-50 grayscale' : ''}`}>
       <div className="flex items-center gap-4">
         <div className={`w-2 h-10 rounded-full ${isLocked ? 'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.5)]' : (isActive ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-600')}`} />
         <div>
@@ -35,14 +56,16 @@ export const BotStatusCard = ({ pair }: { pair: any }) => {
       
       <div className="flex gap-2">
         <button 
-          disabled={isLocked}
-          className={`p-2 text-slate-400 hover:text-white transition bg-slate-700/50 rounded-lg ${isLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
+          onClick={handleDelete}
+          disabled={isLocked || isDeleting || isActive}
+          className={`p-2 text-slate-400 hover:text-rose-400 transition bg-slate-700/50 rounded-lg ${isLocked || isActive ? 'opacity-20 cursor-not-allowed' : ''}`}
+          title={isActive ? "Stop bot before deleting" : "Delete Pair"}
         >
-          <Settings2 size={18} />
+          <Trash2 size={18} />
         </button>
         <button 
           onClick={toggleBot}
-          disabled={isLocked}
+          disabled={isLocked || isDeleting}
           className={`p-2 rounded-lg transition-all ${
             isLocked 
             ? 'bg-slate-800 text-slate-600 cursor-not-allowed' 

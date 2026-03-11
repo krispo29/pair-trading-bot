@@ -31,7 +31,15 @@ export const tradeHistory = pgTable('trade_history', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// 3. เก็บ API Keys ของ Exchange (ต้องมีการเข้ารหัสเสมอ!)
+// 3. เก็บประวัติ Z-Score สำหรับวาดกราฟ
+export const zScoreHistory = pgTable('z_score_history', {
+  id: serial('id').primaryKey(),
+  pairId: integer('pair_id').references(() => tradingPairs.id),
+  zScore: doublePrecision('z_score').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 4. เก็บ API Keys ของ Exchange (ต้องมีการเข้ารหัสเสมอ!)
 export const exchangeConfig = pgTable('exchange_config', {
   id: serial('id').primaryKey(),
   exchangeId: text('exchange_id').notNull(), // e.g., 'binance'
@@ -40,7 +48,7 @@ export const exchangeConfig = pgTable('exchange_config', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// 4. เก็บยอดเงินจำลอง (Paper Balance)
+// 5. เก็บยอดเงินจำลอง (Paper Balance)
 export const paperBalances = pgTable('paper_balances', {
   id: serial('id').primaryKey(),
   asset: text('asset').default('USDT').unique(),
